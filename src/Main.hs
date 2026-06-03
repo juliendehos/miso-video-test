@@ -29,8 +29,8 @@ data Action
   | ActionAskSize ClipId Media
   | ActionSetSize ClipId Int Int
 ----------------------------------------------------------------------
-handleView :: Model -> View Model Action
-handleView model = vfrag
+handleView :: props -> Model -> View Model Action
+handleView _ model = vfrag
   [ p_ []
     [ a_ [ href_ "https://github.com/haskell-miso/miso-video" ] [ text "source" ]
     , text " - "
@@ -74,7 +74,7 @@ handleView model = vfrag
       then [ width_ (ms theSmallWidth), height_ (ms $ theSmallWidth*h `div` w) ]
       else [ width_ (ms w), height_ (ms h) ]
 ----------------------------------------------------------------------
-handleUpdate :: Action -> Effect parent Model Action
+handleUpdate :: Action -> Effect parent props Model Action
 handleUpdate (ActionAskVideo str) = do
   playlist <- use modelPlaylist
   modelPlaying .= if str == ""  || notMember (mkClipId str) playlist
