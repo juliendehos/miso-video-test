@@ -44,6 +44,15 @@ mkVideo title channel src thumbT cat views age likes =
 data Rating = Liked | Disliked
   deriving (Eq)
 ----------------------------------------------------------------------
+-- | Transient player feedback: what to flash over the video and where
+data Flash
+  = FlashPlay
+  | FlashPause
+  | FlashBack
+  | FlashForward
+  | FlashVolume Int  -- ^ new volume in percent
+  deriving (Eq)
+----------------------------------------------------------------------
 -- | One comment under a video
 data Comment = Comment
   { _commentAuthor :: MisoString
@@ -83,6 +92,8 @@ data Model = Model
   , _modelSearch   :: MisoString
   , _modelCategory :: MisoString
   , _modelHover    :: Maybe VideoId
+  , _modelFlash    :: Maybe (Int, Flash)  -- ^ counter restarts the fade-out
+  , _modelCanVolume :: Bool  -- ^ 'False' on iOS, where volume is read-only
   , _modelRatings  :: Map VideoId Rating
   , _modelSubs     :: Set MisoString
   , _modelComments :: Map VideoId [Comment]
@@ -107,6 +118,8 @@ mkModel entries = Model
   , _modelSearch   = ""
   , _modelCategory = "All"
   , _modelHover    = Nothing
+  , _modelFlash    = Nothing
+  , _modelCanVolume = True
   , _modelRatings  = Map.empty
   , _modelSubs     = Set.empty
   , _modelComments = Map.fromList (zip ids (snd <$> entries))

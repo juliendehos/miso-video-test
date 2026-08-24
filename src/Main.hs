@@ -31,6 +31,7 @@ import Miso.Lens hiding (set)
 import Miso.FFI.QQ (js)
 import Miso.Media (Media(..), currentTime, duration, load, pause)
 import qualified Miso.Media as Media
+import Miso.Subscription.Util (createSub)
 import qualified Miso.String as MS
 ----------------------------------------------------------------------
 import qualified Miso.CSS as C
@@ -87,27 +88,6 @@ theCatalog =
         "Film" 6800000 "12 years ago" 244000
     , [ mkComment "@vfx_junkie" "the compositing holds up scary well for 2012" 2700 "1 year ago"
       , mkComment "@robot_rights" "forty years later and we still love our robot overlords" 1500 "4 months ago"
-      ]
-    )
-  , ( mkVideo "Dandelion in the wind \8212 macro slow motion"
-        "CC0 Nature" "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4" 2
-        "Nature" 384000 "3 years ago" 12800
-    , [ mkComment "@macro_maniac" "this is what my brain needed today" 640 "2 months ago"
-      , mkComment "@slowmo_sam" "petition for a ten hour version" 910 "1 year ago"
-      ]
-    )
-  , ( mkVideo "Jellyfish \8212 deep sea relaxation"
-        "CC0 Nature" "https://test-videos.co.uk/vids/jellyfish/mp4/h264/720/Jellyfish_720_10s_5MB.mp4" 3
-        "Deep Ocean" 921000 "4 years ago" 44100
-    , [ mkComment "@thalassophile" "the ocean\8217s lava lamp" 1200 "8 months ago"
-      , mkComment "@deepbreather" "watching this on loop instead of sleeping" 760 "3 months ago"
-      ]
-    )
-  , ( mkVideo "It\8217s Friday \8212 weekend energy"
-        "CC0 Clips" "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/friday.mp4" 1
-        "Shorts" 2300000 "8 months ago" 98700
-    , [ mkComment "@weekendwarrior" "it is wednesday my dudes" 4400 "5 months ago"
-      , mkComment "@tgif_official" "posting this in the group chat every single friday" 2800 "2 months ago"
       ]
     )
   , ( mkVideo "Caminandes 1: Llama Drama"
@@ -221,7 +201,10 @@ data Action
   | ActionAskTime Media
   | ActionSetTime Double
   | ActionSeek MisoString
+  | ActionSkip Double
   | ActionVolume MisoString
+  | ActionBumpVolume Double
+  | ActionSetCanVolume Bool
   | ActionToggleMute
   | ActionCycleRate
   | ActionToggleTheater
@@ -244,7 +227,7 @@ handleView _ _ model = div_ [ class_ "app" ]
       Nothing  -> viewHome model
       -- on the watch page the sidebar becomes an overlay drawer
       Just vid -> div_ [ class_ drawerClass ]
-        [ viewSidebar model, viewWatch model vid ]
+        [ viewSidebar model, viewScrim, viewWatch model vid ]
   ]
   where
     drawerClass
@@ -281,6 +264,7 @@ viewTopbar model = header_ [ class_ "topbar" ]
 viewHome :: Model -> View context Model Action
 viewHome model = div_ [ class_ shellClass ]
   [ viewSidebar model
+  , viewScrim
   , main_ [ class_ "content" ]
     [ case model ^. modelFeed of
         FeedHome -> viewChips model
@@ -348,6 +332,11 @@ visibleVideos model = case model ^. modelFeed of
         || q `MS.isInfixOf` MS.toLower (v ^. videoChannel))
     cat = model ^. modelCategory
     q = MS.toLower (MS.strip (model ^. modelSearch))
+----------------------------------------------------------------------
+-- | Backdrop behind the sidebar when it floats as a drawer (watch
+-- page, phones); tapping it closes the drawer
+viewScrim :: View context Model Action
+viewScrim = div_ [ class_ "scrim", onClick (ActionSetSidebar False) ] []
 ----------------------------------------------------------------------
 viewSidebar :: Model -> View context Model Action
 viewSidebar model = nav_ [ class_ "rail" ]
@@ -462,6 +451,7 @@ viewPlayer model vid v = div_ [ id_ "player-shell", class_ shellClass ]
     ]
     []
   , div_ [ class_ "bigplay", onClick ActionTogglePlay ] [ span_ [] [ "▶" ] ]
+  , viewFlash (model ^. modelFlash)
   , div_ [ class_ "controls" ]
     [ input_
       [ class_ "seek"
@@ -473,11 +463,13 @@ viewPlayer model vid v = div_ [ id_ "player-shell", class_ shellClass ]
       , onInput ActionSeek
       , C.style_ [ sliderFill "#f03" "rgba(255,255,255,0.25)" time totalSecs ]
       ]
-    , div_ [ class_ "ctrl-row" ]
+    , div_ [ class_ "ctrl-row" ] $
       [ ctrl "play-btn" playTitle (if playing then "❚❚" else "▶") ActionTogglePlay
       , ctrl "" "Next" "⏭" ActionNext
       , ctrl "" muteTitle (if muted then "🔇" else "🔊") ActionToggleMute
-      , input_
+      ] <>
+      -- no slider where the platform ignores volume writes (iOS)
+      [ input_
         [ class_ "vol"
         , type_ "range"
         , min_ "0"
@@ -487,7 +479,9 @@ viewPlayer model vid v = div_ [ id_ "player-shell", class_ shellClass ]
         , onInput ActionVolume
         , C.style_ [ sliderFill "#fff" "rgba(255,255,255,0.25)" (if muted then 0 else vol) 1 ]
         ]
-      , span_ [ class_ "time" ]
+      | model ^. modelCanVolume
+      ] <>
+      [ span_ [ class_ "time" ]
         [ text (fmtTime time <> " / " <> maybe "--:--" fmtTime (v ^. videoDuration)) ]
       , span_ [ class_ "ctrl-spacer" ] []
       , ctrl "rate-btn" "Playback speed" (fmtRate (model ^. modelRate)) ActionCycleRate
@@ -509,6 +503,26 @@ viewPlayer model vid v = div_ [ id_ "player-shell", class_ shellClass ]
     ctrl cls name glyph action = button_
       [ class_ ("ctrl-btn " <> cls), title_ name, onClick action ]
       [ text glyph ]
+----------------------------------------------------------------------
+-- | Transient feedback flashed over the video: play/pause and volume
+-- in the middle, arrow-key skips as "5s" bubbles on the sides. The
+-- animation-name alternates with the flash counter so a repeated
+-- action restarts the fade-out even though the DOM node is reused.
+viewFlash :: Maybe (Int, Flash) -> View context Model Action
+viewFlash Nothing = text ""
+viewFlash (Just (n, f)) = div_
+  [ class_ (MS.unwords (["flash"] <> side <> [parity])) ]
+  [ span_ [ class_ "flash-bubble" ] [ text glyph ] ]
+  where
+    parity = if even n then "flash-a" else "flash-b"
+    -- no side class means a centered pill (volume)
+    (side, glyph) = case f of
+      FlashPlay      -> (["mid"], "▶")
+      FlashPause     -> (["mid"], "❚❚")
+      FlashBack      -> (["left"], "◂◂ 5s")
+      FlashForward   -> (["right"], "5s ▸▸")
+      FlashVolume 0  -> ([], "🔇")
+      FlashVolume p  -> ([], "🔊 " <> ms p <> "%")
 ----------------------------------------------------------------------
 -- | Paint the played part of a range input by hand
 sliderFill :: MisoString -> MisoString -> Double -> Double -> C.Style
@@ -699,18 +713,65 @@ playQuiet domId = [js|
   }
 |]
 ----------------------------------------------------------------------
+-- | Watch-page keyboard shortcuts: space toggles play/pause, the
+-- left/right arrows skip 5 seconds and up/down nudge the volume.
+-- Started when a video opens and stopped on leaving the watch page.
+-- The callback is synchronous so preventDefault can stop space and
+-- the arrows from scrolling the page; keys aimed at form fields
+-- (search box, comment input, the sliders) are left alone.
+watchKeys :: Sub Action
+watchKeys sink = createSub acquire release sink
+  where
+    acquire = do
+      cb <- syncCallback1 onKey
+      win <- jsg "window"
+      void $ win # "addEventListener" $ ("keydown" :: MisoString, cb)
+      pure cb
+    release cb = do
+      win <- jsg "window"
+      void $ win # "removeEventListener" $ ("keydown" :: MisoString, cb)
+    onKey ev = do
+      mTag <- fromJSVal =<< ((! "tagName") =<< ev ! "target")
+      mCode <- fromJSVal =<< ev ! "keyCode"
+      let typing = maybe False (`elem` formTags) mTag
+          formTags = [ "INPUT", "TEXTAREA", "SELECT" ] :: [MisoString]
+          fire action = do
+            eventPreventDefault ev
+            sink action
+      unless typing $ forM_ mCode $ \code -> case code :: Int of
+        32 -> fire ActionTogglePlay
+        37 -> fire (ActionSkip (-5))
+        39 -> fire (ActionSkip 5)
+        38 -> fire (ActionBumpVolume 0.1)
+        40 -> fire (ActionBumpVolume (-0.1))
+        _  -> pure ()
+----------------------------------------------------------------------
+-- | iOS WebKit ignores writes to @HTMLMediaElement.volume@ (only the
+-- hardware buttons control it), so probe a detached element and hide
+-- the volume slider when setting it doesn't stick.
+probeVolume :: IO Bool
+probeVolume = do
+  doc <- jsg "document"
+  el <- doc # ("createElement" :: MisoString) $ ("video" :: MisoString)
+  set "volume" (0.5 :: Double) (Object el)
+  vol <- fromJSValUnchecked =<< el ! "volume"
+  pure (vol == (0.5 :: Double))
+----------------------------------------------------------------------
 -- | Update
 handleUpdate :: Action -> Effect context props Model Action
 handleUpdate = \case
-  ActionInit ->
+  ActionInit -> do
     -- start with the sidebar closed on phone-sized screens
     io (ActionSetSidebar . (>= 800) <$> windowInnerWidth)
+    io (ActionSetCanVolume <$> probeVolume)
   ActionSetSidebar open ->
     modelSidebar .= open
   ActionHome -> do
     modelCurrent .= Nothing
     modelPlaying .= False
     modelTime .= 0
+    modelFlash .= Nothing
+    stopSub ("watch-keys" :: MisoString)
   ActionFeed feed -> do
     -- switching feeds starts from a clean filter state
     modelFeed .= feed
@@ -727,8 +788,13 @@ handleUpdate = \case
     modelHover .= Nothing
     modelHistory %= ((vid :) . filter (/= vid))
     modelDraft .= ""
+    modelFlash .= Nothing
     -- the watch page starts with the drawer closed
     modelSidebar .= False
+    -- keyboard shortcuts only live while a video is open
+    startSub ("watch-keys" :: MisoString) watchKeys
+    -- opening from deep in a scrolled feed starts at the top
+    io_ [js| window.scrollTo(0, 0); |]
   ActionMeta vid media ->
     io (ActionSetMeta vid <$> duration media <*> Media.videoWidth media <*> Media.videoHeight media)
   ActionSetMeta vid d w h ->
@@ -751,6 +817,7 @@ handleUpdate = \case
   ActionTogglePlay -> do
     playing <- use modelPlaying
     modelPlaying .= not playing
+    flash (if playing then FlashPause else FlashPlay)
     io_ (if playing then withPlayer pause else playQuiet "player")
   ActionCanPlay -> do
     -- a fresh source resets the element, resync rate and playback
@@ -770,10 +837,33 @@ handleUpdate = \case
       io_ $ do
         el <- getElementById "player"
         set "currentTime" (secs :: Double) (Object el)
+  ActionSkip delta -> do
+    videos <- use modelVideos
+    mCurrent <- use modelCurrent
+    forM_ mCurrent $ \vid -> do
+      time <- use modelTime
+      -- clamp to the clip; the browser clamps to duration anyway
+      let mDur = (^. videoDuration) =<< (videos !? vid)
+          secs = maybe id min mDur (max 0 (time + delta))
+      modelTime .= secs
+      flash (if delta < 0 then FlashBack else FlashForward)
+      io_ $ do
+        el <- getElementById "player"
+        set "currentTime" (secs :: Double) (Object el)
   ActionVolume str ->
     forM_ (MS.fromMisoStringEither str) $ \vol -> do
       modelVolume .= vol
       modelMuted .= (vol <= (0 :: Double))
+  ActionBumpVolume delta -> do
+    vol <- use modelVolume
+    muted <- use modelMuted
+    -- nudging the volume up also unmutes
+    let next = min 1 (max 0 ((if muted then 0 else vol) + delta))
+    modelVolume .= next
+    modelMuted .= (next <= 0)
+    flash (FlashVolume (round (100 * next)))
+  ActionSetCanVolume can ->
+    modelCanVolume .= can
   ActionToggleMute ->
     modelMuted %= not
   ActionCycleRate -> do
@@ -825,6 +915,7 @@ handleUpdate = \case
   ActionToggleSidebar ->
     modelSidebar %= not
   where
+    flash f = modelFlash %= \mOld -> Just (maybe 0 (succ . fst) mOld, f)
     withPlayer f = f . Media =<< getElementById "player"
     withThumb f vid = f . Media =<< getElementById (thumbDomId vid)
     nextRate rate = case dropWhile (/= rate) theRates of
@@ -841,6 +932,8 @@ theStyle = C.sheet_
     , C.backgroundColor (C.hex "0f0f0f")
     , C.color (C.hex "f1f1f1")
     , C.fontFamily "Roboto, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+    -- clip (not hidden) keeps the sticky topbar working
+    , C.overflowX "clip"
     ]
   , C.selector_ "::-webkit-scrollbar"
     [ C.width (C.px 8) ]
@@ -914,6 +1007,9 @@ theStyle = C.sheet_
     [ C.flex "1"
     , C.display "flex"
     , C.maxWidth (C.px 560)
+    -- without this the input's intrinsic width makes the topbar
+    -- overflow on phones
+    , C.minWidth "0"
     , C.position "relative"
     ]
   , C.selector_ ".search-clear"
@@ -939,6 +1035,7 @@ theStyle = C.sheet_
   , C.selector_ ".searchbox input"
     [ C.flex "1"
     , C.minWidth "0"
+    , C.width "0"
     , C.height (C.px 40)
     , C.padding "0 36px 0 16px"
     , C.backgroundColor (C.hex "121212")
@@ -1014,6 +1111,23 @@ theStyle = C.sheet_
     , C.padding "0"
     , C.boxShadow "none"
     ]
+  -- backdrop that closes the drawer on tap; only shown while the
+  -- rail floats over the content (watch page always, phones via the
+  -- media query below)
+  , C.selector_ ".scrim"
+    [ C.display "none"
+    , C.position "fixed"
+    , C.left "0"
+    , C.right "0"
+    , C.top (C.px 56)
+    , C.bottom "0"
+    , C.backgroundColor (C.rgba 0 0 0 0.5)
+    , C.zIndex 80
+    ]
+  , C.selector_ ".shell.drawer .scrim"
+    [ C.display "block" ]
+  , C.selector_ ".shell.rail-closed .scrim"
+    [ C.display "none" ]
   , C.selector_ ".rail-item"
     [ C.display "flex"
     , C.alignItems "center"
@@ -1255,6 +1369,54 @@ theStyle = C.sheet_
     ]
   , C.selector_ ".bigplay:hover span"
     [ C.transform "scale(1.08)" ]
+  -- transient key/click feedback flashed over the video
+  , C.selector_ ".flash"
+    [ C.position "absolute"
+    , "inset" =: "0"
+    , C.display "flex"
+    , C.alignItems "center"
+    , C.justifyContent "center"
+    , "pointer-events" =: "none"
+    ]
+  , C.selector_ ".flash.left"
+    [ C.justifyContent "flex-start"
+    , C.paddingLeft (C.pct 12)
+    ]
+  , C.selector_ ".flash.right"
+    [ C.justifyContent "flex-end"
+    , C.paddingRight (C.pct 12)
+    ]
+  , C.selector_ ".flash-bubble"
+    [ C.display "grid"
+    , "place-items" =: "center"
+    , C.padding "10px 18px"
+    , C.backgroundColor (C.rgba 0 0 0 0.65)
+    , C.borderRadius (C.px 999)
+    , C.color (C.hex "fff")
+    , C.fontSize (C.px 15)
+    , C.fontWeight "500"
+    , C.whiteSpace "nowrap"
+    , C.opacity 0
+    ]
+  , C.selector_ ".flash.mid .flash-bubble"
+    [ C.width (C.px 76)
+    , C.height (C.px 76)
+    , C.padding "0"
+    , C.borderRadius (C.pct 50)
+    , C.fontSize (C.px 26)
+    ]
+  , C.selector_ ".flash-a .flash-bubble"
+    [ C.animation "flash-fade-a 0.55s ease-out" ]
+  , C.selector_ ".flash-b .flash-bubble"
+    [ C.animation "flash-fade-b 0.55s ease-out" ]
+  , C.keyframes_ "flash-fade-a"
+    [ C.from_ [ C.opacity 1, C.transform "scale(0.9)" ]
+    , C.to_   [ C.opacity 0, C.transform "scale(1.3)" ]
+    ]
+  , C.keyframes_ "flash-fade-b"
+    [ C.from_ [ C.opacity 1, C.transform "scale(0.9)" ]
+    , C.to_   [ C.opacity 0, C.transform "scale(1.3)" ]
+    ]
   -- player controls
   , C.selector_ ".controls"
     [ C.position "absolute"
@@ -1591,6 +1753,7 @@ theStyle = C.sheet_
       , C.padding "0"
       , C.boxShadow "none"
       ]
+    , C.rule_ ".shell .scrim" [ C.display "block" ]
     , C.rule_ ".gh-link" [ C.display "none" ]
     , C.rule_ ".watch" [ C.padding (C.px 12) ]
     , C.rule_ ".content" [ C.padding "0 12px 12px" ]
@@ -1609,6 +1772,12 @@ theStyle = C.sheet_
       ]
     , C.rule_ ".ctrl-btn" [ C.minWidth (C.px 30) ]
     , C.rule_ ".logo-sup" [ C.display "none" ]
+    , C.rule_ ".topbar"
+      [ C.gap (C.px 8)
+      , C.padding "0 12px"
+      ]
+    , C.rule_ ".search-btn" [ C.width (C.px 44) ]
+    , C.rule_ ".search-clear" [ C.right (C.px 50) ]
     ]
   ]
 ----------------------------------------------------------------------
