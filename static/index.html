@@ -1,12 +1,47 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>🍜 miso-video</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>MisoTube — a YouTube clone in Haskell + WebAssembly</title>
+    <meta name="description" content="MisoTube is a YouTube-style video app written entirely in Haskell, compiled to WebAssembly with the miso framework. Live video thumbnails, custom player controls, channels, search and feeds — all driven by miso's Media API.">
+    <meta name="theme-color" content="#0f0f0f">
+    <link rel="canonical" href="https://haskell-miso.github.io/miso-video/">
+    <link rel="icon" href="favicon.ico">
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="MisoTube">
+    <meta property="og:title" content="MisoTube — a YouTube clone in Haskell + WebAssembly">
+    <meta property="og:description" content="A YouTube-style video app written in Haskell and compiled to WebAssembly with miso. Custom player controls, live thumbnails, channels, search and feeds.">
+    <meta property="og:url" content="https://haskell-miso.github.io/miso-video/">
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="MisoTube — a YouTube clone in Haskell + WebAssembly">
+    <meta name="twitter:description" content="A YouTube-style video app written in Haskell and compiled to WebAssembly with miso.">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "MisoTube",
+      "url": "https://haskell-miso.github.io/miso-video/",
+      "applicationCategory": "MultimediaApplication",
+      "operatingSystem": "Web",
+      "description": "A YouTube-style video app written in Haskell, compiled to WebAssembly with the miso framework.",
+      "author": { "@type": "Organization", "name": "haskell-miso", "url": "https://github.com/haskell-miso" }
+    }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
   </head>
   <body>
-    <h1 style="font-family: monospace;"> 🍜 📽️ miso-video</h1>
+    <noscript>
+      <h1>MisoTube</h1>
+      <p>A YouTube-style video app written in Haskell and compiled to WebAssembly with
+      the <a href="https://github.com/dmjio/miso">miso</a> framework.
+      Enable JavaScript/WebAssembly to watch. Source code:
+      <a href="https://github.com/haskell-miso/miso-video">github.com/haskell-miso/miso-video</a>.</p>
+    </noscript>
     <script src="index.js" type="module"></script>
   </body>
 </html>
