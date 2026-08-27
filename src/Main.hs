@@ -196,6 +196,7 @@ data Action
   | ActionMeta VideoId Media
   | ActionSetMeta VideoId Double Int Int
   | ActionHover (Maybe VideoId)
+  | ActionToggleThumbSound VideoId
   | ActionTogglePlay
   | ActionCanPlay
   | ActionAskTime Media
@@ -273,7 +274,7 @@ viewHome model = div_ [ class_ shellClass ]
         feed -> h2_ [ class_ "feed-title" ] [ text (feedTitle feed) ]
     , if null hits
       then div_ [ class_ "empty" ] [ text emptyMsg ]
-      else div_ [ class_ "grid" ] (viewCard <$> hits)
+      else div_ [ class_ "grid" ] (viewCard model <$> hits)
     ]
   ]
   where
@@ -374,12 +375,9 @@ viewChips model = div_ [ class_ "chips" ] (chip <$> cats)
       ]
       [ text cat ]
 ----------------------------------------------------------------------
-viewCard :: (VideoId, Video) -> View context Model Action
-viewCard (vid, v) = div_ [ class_ "card", onClick (ActionOpen vid) ]
-  [ div_ [ class_ "thumb" ]
-    [ viewThumbVideo vid v
-    , span_ [ class_ "dur" ] [ text (maybe "•••" fmtTime (v ^. videoDuration)) ]
-    ]
+viewCard :: Model -> (VideoId, Video) -> View context Model Action
+viewCard model (vid, v) = div_ [ class_ "card", onClick (ActionOpen vid) ]
+  [ viewThumb "thumb" (vid `Set.member` (model ^. modelThumbSound)) vid v
   , div_ [ class_ "card-meta" ]
     [ viewAvatar "avatar" (v ^. videoChannel)
     , div_ [ class_ "card-text" ]
@@ -390,20 +388,39 @@ viewCard (vid, v) = div_ [ class_ "card", onClick (ActionOpen vid) ]
     ]
   ]
 ----------------------------------------------------------------------
--- | A real @<video>@ as thumbnail: the media fragment picks the
--- poster frame, metadata gives us the true duration, and hovering
--- plays a muted preview.
-viewThumbVideo :: VideoId -> Video -> View context Model Action
-viewThumbVideo vid v = video_
+-- | The thumbnail box: a real @<video>@ for the live preview, the
+-- duration badge, and a speaker button that unmutes the preview.
+-- Hover is tracked on this wrapper (not the video) with
+-- mouseenter\/mouseleave so moving onto the speaker button doesn't
+-- read as leaving the thumbnail and reset the preview.
+viewThumb :: MisoString -> Bool -> VideoId -> Video -> View context Model Action
+viewThumb cls soundOn vid v = div_
+  [ class_ cls
+  , onMouseEnter (ActionHover (Just vid))
+  , onMouseLeave (ActionHover Nothing)
+  ]
+  [ viewThumbVideo soundOn vid v
+  , button_
+    [ class_ "thumb-sound"
+    , title_ (if soundOn then "Mute preview" else "Unmute preview")
+    , onClickWithOptions stopPropagation (ActionToggleThumbSound vid)
+    ]
+    [ text (if soundOn then "🔊" else "🔇") ]
+  , span_ [ class_ "dur" ] [ text (maybe "•••" fmtTime (v ^. videoDuration)) ]
+  ]
+----------------------------------------------------------------------
+-- | The preview video itself: the media fragment picks the poster
+-- frame, metadata gives us the true duration, and hovering plays it
+-- (muted by default, or with sound once the speaker button is on).
+viewThumbVideo :: Bool -> VideoId -> Video -> View context Model Action
+viewThumbVideo soundOn vid v = video_
   [ id_ (thumbDomId vid)
   , src_ (v ^. videoSrc <> "#t=" <> ms (v ^. videoThumbT))
   , preload_ "metadata"
-  , muted_ True
+  , muted_ (not soundOn)
   , loop_ True
   , boolProp "playsinline" True
   , onLoadedMetadataWith (ActionMeta vid)
-  , onMouseOver (ActionHover (Just vid))
-  , onMouseOut (ActionHover Nothing)
   ]
   []
 ----------------------------------------------------------------------
@@ -426,7 +443,7 @@ viewWatch model vid = case (model ^. modelVideos) !? vid of
       , viewComments model vid
       ]
     , div_ [ class_ "upnext" ]
-        (span_ [ class_ "upnext-head" ] [ "Up next" ] : (upnextRow <$> others))
+        (span_ [ class_ "upnext-head" ] [ "Up next" ] : (upnextRow model <$> others))
     ]
   where
     watchClass
@@ -655,12 +672,9 @@ viewComments model vid = div_ [ class_ "comments" ] $
           | c ^. commentVote == Just r = "cvote active"
           | otherwise = "cvote"
 ----------------------------------------------------------------------
-upnextRow :: (VideoId, Video) -> View context Model Action
-upnextRow (vid, v) = div_ [ class_ "up-row", onClick (ActionOpen vid) ]
-  [ div_ [ class_ "up-thumb" ]
-    [ viewThumbVideo vid v
-    , span_ [ class_ "dur" ] [ text (maybe "•••" fmtTime (v ^. videoDuration)) ]
-    ]
+upnextRow :: Model -> (VideoId, Video) -> View context Model Action
+upnextRow model (vid, v) = div_ [ class_ "up-row", onClick (ActionOpen vid) ]
+  [ viewThumb "up-thumb" (vid `Set.member` (model ^. modelThumbSound)) vid v
   , div_ [ class_ "up-text" ]
     [ h4_ [ class_ "up-title" ] [ text (v ^. videoTitle) ]
     , p_ [ class_ "up-sub" ] [ text (v ^. videoChannel) ]
@@ -812,8 +826,12 @@ handleUpdate = \case
     mHover <- use modelHover
     forM_ mHover $ \vid -> do
       modelHover .= Nothing
+      -- back to muted, so the next hover always starts silently
+      modelThumbSound %= Set.delete vid
       -- reloading rewinds the preview back to its poster frame
       io_ (withThumb load vid)
+  ActionToggleThumbSound vid ->
+    modelThumbSound %= \s -> if vid `Set.member` s then Set.delete vid s else Set.insert vid s
   ActionTogglePlay -> do
     playing <- use modelPlaying
     modelPlaying .= not playing
@@ -1286,6 +1304,27 @@ theStyle = C.sheet_
     , "pointer-events" =: "none"
     , "font-variant-numeric" =: "tabular-nums"
     ]
+  , C.selector_ ".thumb-sound"
+    [ C.position "absolute"
+    , C.top (C.px 8)
+    , C.right (C.px 8)
+    , C.width (C.px 28)
+    , C.height (C.px 28)
+    , C.display "grid"
+    , "place-items" =: "center"
+    , C.backgroundColor (C.rgba 0 0 0 0.8)
+    , C.border "none"
+    , C.borderRadius (C.pct 50)
+    , C.color (C.hex "fff")
+    , C.fontSize (C.px 13)
+    , C.cursor "pointer"
+    , C.opacity 0
+    , C.transition "opacity 0.15s ease"
+    ]
+  , C.selector_ ".thumb:hover .thumb-sound, .up-thumb:hover .thumb-sound"
+    [ C.opacity 1 ]
+  , C.selector_ ".thumb-sound:hover"
+    [ C.backgroundColor (C.hex "000") ]
   , C.selector_ ".card-meta"
     [ C.display "flex"
     , C.gap (C.px 12)

@@ -92,6 +92,7 @@ data Model = Model
   , _modelSearch   :: MisoString
   , _modelCategory :: MisoString
   , _modelHover    :: Maybe VideoId
+  , _modelThumbSound :: Set VideoId  -- ^ thumbnails whose hover preview plays audio
   , _modelFlash    :: Maybe (Int, Flash)  -- ^ counter restarts the fade-out
   , _modelCanVolume :: Bool  -- ^ 'False' on iOS, where volume is read-only
   , _modelRatings  :: Map VideoId Rating
@@ -118,6 +119,7 @@ mkModel entries = Model
   , _modelSearch   = ""
   , _modelCategory = "All"
   , _modelHover    = Nothing
+  , _modelThumbSound = Set.empty
   , _modelFlash    = Nothing
   , _modelCanVolume = True
   , _modelRatings  = Map.empty
