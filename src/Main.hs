@@ -733,7 +733,7 @@ playQuiet domId = [js|
 -- The callback is synchronous so preventDefault can stop space and
 -- the arrows from scrolling the page; keys aimed at form fields
 -- (search box, comment input, the sliders) are left alone.
-watchKeys :: Sub Action
+watchKeys :: Sub model Action
 watchKeys sink = createSub acquire release sink
   where
     acquire = do
